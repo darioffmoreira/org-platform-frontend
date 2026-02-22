@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="pt">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Org Platform - QR Scan</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 16px; }
+    .row { display: flex; gap: 16px; flex-wrap: wrap; }
+    .card { border: 1px solid #ddd; border-radius: 8px; padding: 12px; max-width: 520px; }
+    label { display:block; margin-top: 8px; }
+    input { width: 100%; padding: 8px; }
+    button { margin-top: 10px; padding: 8px 12px; }
+    pre { background:#f7f7f7; padding: 10px; overflow:auto; }
+    video { width: 320px; max-width: 100%; border: 1px solid #ddd; border-radius: 8px; }
+    .muted { color:#666; font-size: 0.9em; }
+  </style>
+</head>
+<body>
+  <h2>Org Platform - Leitor de QR Code (Chaves)</h2>
+
+  <div class="row">
+    <div class="card">
+      <h3>1) Login</h3>
+      <div class="muted">O token é guardado apenas no browser (sessionStorage).</div>
+      <div id="loginForm">
+        <label>Username</label>
+        <input id="username" autocomplete="username" />
+        <label>Password</label>
+        <input id="password" type="password" autocomplete="current-password" />
+        <button id="btnLogin">Login</button>
+      </div>
+
+      <div id="sessionBar" style="display:none">
+        <div class="muted" id="sessionText">Sessão ativa</div>
+        <button id="btnLogout">Logout</button>
+      </div>
+
+      <div id="loginStatus" class="muted"></div>
+    </div>
+
+    <div class="card" id="scanCard" style="display:none">
+      <h3>2) Scan</h3>
+      <div class="muted">Permite câmara (getUserMedia). Se não for possível, cola o código manualmente.</div>
+      <video id="video" playsinline></video>
+      <canvas id="canvas" style="display:none"></canvas>
+      <div>
+        <label>Código da chave</label>
+        <input id="keyCode" placeholder="Ex: ABC-001" />
+        <button id="btnFetch">Consultar</button>
+        <button id="btnStart">Iniciar Câmara</button>
+        <button id="btnStop">Parar</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" id="resultCard" style="display:none; margin-top:16px; max-width: 1100px;">
+    <h3>Resultado</h3>
+    <pre id="result">---</pre>
+  </div>
+
+  <script src="https://unpkg.com/jsqr/dist/jsQR.js"></script>
+  <script>
+    const qs = new URLSearchParams(location.search);
+    if (qs.get('code')) {
+      document.getElementById('keyCode').value = qs.get('code');
+    }
+
+    // For GitHub Pages, the API is on a different origin (Render).
+    // Configure via query param: ?apiBase=https://YOUR-BACKEND.onrender.com
+    // If provided once, it is stored in sessionStorage for the session.
+    const apiBaseFromQuery = (qs.get('apiBase') || '').trim();
+    if (apiBaseFromQuery) {
+      sessionStorage.setItem('apiBase', apiBaseFromQuery);
+    }
+    const apiBase = (sessionStorage.getItem('apiBase') || '').replace(/\/$/, '');
+
+    const apiLogin = apiBase + '/api/login';
+    const apiKey = (code) => apiBase + '/api/key/' + encodeURIComponent(code);
+
+    function setStatus(msg) {
+      document.getElementById('loginStatus').textContent = msg;
+    }
+
+    function setResult(obj) {
+      document.getElementById('result').textContent = typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2);
+    }
+
+    function getToken() {
+      return sessionStorage.getItem('token');
+    }
+
+    function updateAuthUI() {
+      const token = getToken();
+      const scanCard = document.getElementById('scanCard');
+      const resultCard = document.getElementById('resultCard');
+      const loginForm = document.getElementById('loginForm');
+      const sessionBar = document.getElementById('sessionBar');
+      const sessionText = document.getElementById('sessionText');
+      const authed = !!token;
+      scanCard.style.display = authed ? '' : 'none';
+      resultCard.style.display = authed ? '' : 'none';
+
+      // Hide login form after success; show logout/session bar instead
+      loginForm.style.display = authed ? 'none' : '';
+      sessionBar.style.display = authed ? '' : 'none';
+      if (authed) {
+        const u = document.getElementById('username').value.trim();
+        sessionText.textContent = u ? ('Sessão ativa: ' + u) : 'Sessão ativa';
+      }
+
+      if (!authed) {
+        stopCamera();
+        setResult('---');
+      }
+    }
+
+    document.getElementById('btnLogout').addEventListener('click', () => {
+      sessionStorage.removeItem('token');
+      setStatus('Sessão terminada');
+      updateAuthUI();
+    });
+
+    document.getElementById('btnLogin').addEventListener('click', async () => {
+      if (!apiBase) {
+        setStatus('Falta apiBase. Abre com ?apiBase=https://TEU-BACKEND.onrender.com');
+        return;
+      }
+
+      const username = document.getElementById('username').value.trim();
+      const password = document.getElementById('password').value;
+      setStatus('A autenticar...');
+      try {
+        const res = await fetch(apiLogin, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.success && data.token) {
+          sessionStorage.setItem('token', data.token);
+          setStatus('Login OK');
+          updateAuthUI();
+
+          // Clear password after successful login
+          document.getElementById('password').value = '';
+
+          // If QR provided a code, try to fetch immediately after successful login
+          const code = document.getElementById('keyCode').value.trim();
+          if (code) {
+            document.getElementById('btnFetch').click();
+          }
+        } else {
+          sessionStorage.removeItem('token');
+          setStatus('Login falhou');
+          setResult(data);
+          updateAuthUI();
+        }
+      } catch (e) {
+        setStatus('Erro no login');
+        setResult(String(e));
+        updateAuthUI();
+      }
+    });
+
+    document.getElementById('btnFetch').addEventListener('click', async () => {
+      const code = document.getElementById('keyCode').value.trim();
+      if (!code) {
+        setResult('Indica um código.');
+        return;
+      }
+      const token = getToken();
+      if (!token) {
+        setResult('Faz login primeiro (para obter token).');
+        return;
+      }
+      if (!apiBase) {
+        setResult('Falta apiBase. Abre com ?apiBase=https://TEU-BACKEND.onrender.com');
+        return;
+      }
+      try {
+        const res = await fetch(apiKey(code), {
+          headers: { 'Authorization': 'Bearer ' + token }
+        });
+        const data = await res.json().catch(() => ({}));
+        setResult(data);
+      } catch (e) {
+        setResult(String(e));
+      }
+    });
+
+    // QR scanning
+    let stream = null;
+    let scanning = false;
+
+    async function startCamera() {
+      if (scanning) return;
+      const video = document.getElementById('video');
+      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+      video.srcObject = stream;
+      await video.play();
+      scanning = true;
+      tick();
+    }
+
+    function stopCamera() {
+      scanning = false;
+      const video = document.getElementById('video');
+      video.pause();
+      if (stream) {
+        stream.getTracks().forEach(t => t.stop());
+        stream = null;
+      }
+    }
+
+    function extractCode(text) {
+      if (!text) return null;
+      try {
+        const url = new URL(text);
+        const code = url.searchParams.get('code');
+        if (code) return code;
+      } catch (_) { }
+
+      // Text fallback patterns
+      const lines = String(text).split(/\r?\n/);
+      for (const line of lines) {
+        const m = line.match(/code\s*=\s*(.+)$/i);
+        if (m) return m[1].trim();
+      }
+
+      // assume the whole text is the code
+      return String(text).trim();
+    }
+
+    function tick() {
+      if (!scanning) return;
+      const video = document.getElementById('video');
+      const canvas = document.getElementById('canvas');
+      const ctx = canvas.getContext('2d');
+      if (video.readyState === video.HAVE_ENOUGH_DATA) {
+        canvas.height = video.videoHeight;
+        canvas.width = video.videoWidth;
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const code = jsQR(imageData.data, imageData.width, imageData.height);
+        if (code && code.data) {
+          const extracted = extractCode(code.data);
+          if (extracted) {
+            document.getElementById('keyCode').value = extracted;
+            stopCamera();
+          }
+        }
+      }
+      requestAnimationFrame(tick);
+    }
+
+    document.getElementById('btnStart').addEventListener('click', async () => {
+      if (!getToken()) {
+        setResult('Faz login primeiro (para obter token).');
+        return;
+      }
+      try { await startCamera(); } catch (e) { setResult('Erro a iniciar câmara: ' + e); }
+    });
+    document.getElementById('btnStop').addEventListener('click', stopCamera);
+
+    // On load: hide scan/result unless already authenticated
+    updateAuthUI();
+  </script>
+</body>
+</html>
