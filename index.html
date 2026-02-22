@@ -66,17 +66,8 @@
       document.getElementById('keyCode').value = qs.get('code');
     }
 
-    // For GitHub Pages, the API is on a different origin (Render).
-    // Configure via query param: ?apiBase=https://YOUR-BACKEND.onrender.com
-    // If provided once, it is stored in sessionStorage for the session.
-    const apiBaseFromQuery = (qs.get('apiBase') || '').trim();
-    if (apiBaseFromQuery) {
-      sessionStorage.setItem('apiBase', apiBaseFromQuery);
-    }
-    const apiBase = (sessionStorage.getItem('apiBase') || '').replace(/\/$/, '');
-
-    const apiLogin = apiBase + '/api/login';
-    const apiKey = (code) => apiBase + '/api/key/' + encodeURIComponent(code);
+    const apiLogin = '/api/login';
+    const apiKey = (code) => '/api/key/' + encodeURIComponent(code);
 
     function setStatus(msg) {
       document.getElementById('loginStatus').textContent = msg;
@@ -88,6 +79,30 @@
 
     function getToken() {
       return sessionStorage.getItem('token');
+    }
+
+    async function fetchKeyInfo(code) {
+      const trimmed = (code || '').trim();
+      if (!trimmed) {
+        setResult('Indica um código.');
+        return;
+      }
+      const token = getToken();
+      if (!token) {
+        setResult('Faz login primeiro (para obter token).');
+        return;
+      }
+
+      try {
+        setResult('A consultar...');
+        const res = await fetch(apiKey(trimmed), {
+          headers: { 'Authorization': 'Bearer ' + token }
+        });
+        const data = await res.json().catch(() => ({}));
+        setResult(data);
+      } catch (e) {
+        setResult(String(e));
+      }
     }
 
     function updateAuthUI() {
@@ -122,11 +137,6 @@
     });
 
     document.getElementById('btnLogin').addEventListener('click', async () => {
-      if (!apiBase) {
-        setStatus('Falta apiBase. Abre com ?apiBase=https://TEU-BACKEND.onrender.com');
-        return;
-      }
-
       const username = document.getElementById('username').value.trim();
       const password = document.getElementById('password').value;
       setStatus('A autenticar...');
@@ -145,10 +155,10 @@
           // Clear password after successful login
           document.getElementById('password').value = '';
 
-          // If QR provided a code, try to fetch immediately after successful login
+          // If QR provided a code, fetch immediately after successful login
           const code = document.getElementById('keyCode').value.trim();
           if (code) {
-            document.getElementById('btnFetch').click();
+            await fetchKeyInfo(code);
           }
         } else {
           sessionStorage.removeItem('token');
@@ -164,30 +174,16 @@
     });
 
     document.getElementById('btnFetch').addEventListener('click', async () => {
-      const code = document.getElementById('keyCode').value.trim();
-      if (!code) {
-        setResult('Indica um código.');
-        return;
-      }
-      const token = getToken();
-      if (!token) {
-        setResult('Faz login primeiro (para obter token).');
-        return;
-      }
-      if (!apiBase) {
-        setResult('Falta apiBase. Abre com ?apiBase=https://TEU-BACKEND.onrender.com');
-        return;
-      }
-      try {
-        const res = await fetch(apiKey(code), {
-          headers: { 'Authorization': 'Bearer ' + token }
-        });
-        const data = await res.json().catch(() => ({}));
-        setResult(data);
-      } catch (e) {
-        setResult(String(e));
-      }
+      const code = document.getElementById('keyCode').value;
+      await fetchKeyInfo(code);
     });
+
+    // Initial UI: if token already exists, show scan/result and auto-fetch when code exists
+    updateAuthUI();
+    const initialCode = document.getElementById('keyCode').value.trim();
+    if (initialCode && getToken()) {
+      fetchKeyInfo(initialCode);
+    }
 
     // QR scanning
     let stream = null;
