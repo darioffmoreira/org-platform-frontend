@@ -189,6 +189,25 @@
     let stream = null;
     let scanning = false;
 
+    // Auto-fetch when user types/pastes a code while authenticated
+    let autoFetchTimer = null;
+    const keyCodeInput = document.getElementById('keyCode');
+    keyCodeInput.addEventListener('input', () => {
+      if (!getToken()) return;
+      if (autoFetchTimer) {
+        clearTimeout(autoFetchTimer);
+      }
+      autoFetchTimer = setTimeout(() => {
+        fetchKeyInfo(keyCodeInput.value);
+      }, 500);
+    });
+    keyCodeInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        fetchKeyInfo(keyCodeInput.value);
+      }
+    });
+
     async function startCamera() {
       if (scanning) return;
       const video = document.getElementById('video');
@@ -244,6 +263,9 @@
           if (extracted) {
             document.getElementById('keyCode').value = extracted;
             stopCamera();
+            if (getToken()) {
+              fetchKeyInfo(extracted);
+            }
           }
         }
       }
